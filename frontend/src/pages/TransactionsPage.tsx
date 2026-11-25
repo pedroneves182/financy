@@ -1,0 +1,33 @@
+import { useMemo, useState } from "react";
+import { ArrowDownUp, CirclePlus, Pencil, Search, Trash2 } from "lucide-react";
+import { useMutation, useQuery } from "@apollo/client";
+import { CATEGORIES_QUERY, DELETE_TRANSACTION, TRANSACTIONS_QUERY } from "../graphql";
+import type { Category, Transaction } from "../types";
+import { formatCurrency, formatDate } from "../types";
+import { TransactionDialog } from "../components/TransactionDialog";
+import { getCategoryPresentation } from "../utils/category-presentation";
+
+export function TransactionsPage() {
+  const { data, loading, error } = useQuery<{ transactions: Transaction[] }>(TRANSACTIONS_QUERY);
+  const { data: categoryData } = useQuery<{ categories: Category[] }>(CATEGORIES_QUERY);
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("ALL");
+  const [categoryFilter, setCategoryFilter] = useState("ALL");
+  const [period, setPeriod] = useState("ALL");
+  const [sortDesc, setSortDesc] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [dialog, setDialog] = useState<{ open: boolean; transaction?: Transaction }>({ open: false });
+  const [remove] = useMutation(DELETE_TRANSACTION, { refetchQueries: [{ query: TRANSACTIONS_QUERY }], awaitRefetchQueries: true });
+  const months = useMemo(() => [...new Set((data?.transactions ?? []).map(t => t.occurredAt.slice(0, 7)))].sort().reverse(), [data]);
+  const transactions = useMemo(() => (data?.transactions ?? []).filter(t => (filter === "ALL" || t.type === filter) && (categoryFilter === "ALL" || t.category?.id === categoryFilter) && (period === "ALL" || t.occurredAt.slice(0, 7) === period) && `${t.description} ${t.category?.name ?? ""}`.toLocaleLowerCase("pt-BR").includes(search.toLocaleLowerCase("pt-BR"))).sort((a,b) => (new Date(a.occurredAt).getTime() - new Date(b.occurredAt).getTime()) * (sortDesc ? -1 : 1)), [data, filter, categoryFilter, period, search, sortDesc]);
+  const pageSize = 10;
+  const pageCount = Math.max(1, Math.ceil(transactions.length / pageSize));
+  const shownTransactions = transactions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  async function deleteTransaction(id: string) { if (window.confirm("Deseja excluir esta transação?")) { try { await remove({ variables: { id } }); } catch { window.alert("Não foi possível excluir a transação."); } } }
+  return <section className="page-section"><div className="page-title-row"><div><h1>Transações</h1><p>Consulte e gerencie suas receitas e despesas.</p></div><button className="button primary" onClick={() => setDialog({ open: true })}><CirclePlus size={17} /> Nova transação</button></div>
+    {error && <p className="notice error" role="alert">Não foi possível carregar suas transações.</p>}
+    <section className="panel list-panel"><div className="list-toolbar"><label className="filter-field"><span>Buscar</span><span className="search-input"><Search size={17} /><input value={search} onChange={e => { setSearch(e.target.value); setCurrentPage(1); }} placeholder="Buscar por descrição" aria-label="Buscar transação" /></span></label><label className="filter-field"><span>Tipo</span><select className="filter-select" value={filter} onChange={e => { setFilter(e.target.value); setCurrentPage(1); }}><option value="ALL">Todos</option><option value="INCOME">Entrada</option><option value="EXPENSE">Saída</option></select></label><label className="filter-field"><span>Categoria</span><select className="filter-select" value={categoryFilter} onChange={e => { setCategoryFilter(e.target.value); setCurrentPage(1); }}><option value="ALL">Todas</option>{categoryData?.categories.map(category => <option value={category.id} key={category.id}>{category.name}</option>)}</select></label><label className="filter-field"><span>Período</span><select className="filter-select" value={period} onChange={e => { setPeriod(e.target.value); setCurrentPage(1); }}><option value="ALL">Todos os períodos</option>{months.map(value => <option value={value} key={value}>{new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(new Date(`${value}-01T12:00:00`))}</option>)}</select></label></div>
+      <div className="table-wrap"><table><thead><tr><th>Descrição</th><th><button className="sort-button" onClick={() => setSortDesc(!sortDesc)}>Data <ArrowDownUp size={14} /></button></th><th>Categoria</th><th>Tipo</th><th className="align-right">Valor</th><th aria-label="Ações" /></tr></thead><tbody>{loading ? <tr><td colSpan={6} className="table-message">Carregando transações…</td></tr> : transactions.length === 0 ? <tr><td colSpan={6} className="table-message">Nenhuma transação encontrada.</td></tr> : shownTransactions.map(t => { const { Icon, tone } = getCategoryPresentation(t.category?.name, t.category?.color, t.category?.icon); return <tr key={t.id}><td><span className="description-cell"><span className={`transaction-icon ${tone}`}><Icon size={16} /></span><span className="table-description">{t.description}</span></span></td><td>{formatDate(t.occurredAt)}</td><td><span className={`category-pill ${tone}`}>{t.category?.name ?? "Sem categoria"}</span></td><td><span className={`type-label ${t.type.toLowerCase()}`}>{t.type === "INCOME" ? "↑ Entrada" : "↓ Saída"}</span></td><td className={`align-right amount ${t.type.toLowerCase()}`}>{t.type === "INCOME" ? "+" : "−"} {formatCurrency(t.amountCents)}</td><td><span className="row-actions"><button className="icon-button danger-hover" aria-label={`Excluir ${t.description}`} onClick={() => void deleteTransaction(t.id)}><Trash2 size={16} /></button><button className="icon-button" aria-label={`Editar ${t.description}`} onClick={() => setDialog({ open: true, transaction: t })}><Pencil size={16} /></button></span></td></tr>; })}</tbody></table></div>
+      <footer className="list-footer"><span>{transactions.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} a {Math.min(currentPage * pageSize, transactions.length)} / {transactions.length} resultados</span>{pageCount > 1 && <div className="pagination"><button className="icon-button" aria-label="Página anterior" disabled={currentPage === 1} onClick={() => setCurrentPage(currentPage - 1)}>‹</button>{Array.from({ length: pageCount }, (_, index) => index + 1).map(page => <button key={page} className={`page-number ${currentPage === page ? "active" : ""}`} onClick={() => setCurrentPage(page)}>{page}</button>)}<button className="icon-button" aria-label="Próxima página" disabled={currentPage === pageCount} onClick={() => setCurrentPage(currentPage + 1)}>›</button></div>}</footer>
+    </section>{dialog.open && <TransactionDialog transaction={dialog.transaction} onClose={() => setDialog({ open: false })} />}</section>;
+}
